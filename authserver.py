@@ -239,9 +239,13 @@ def manageself():
 @app.route("/magicauth/users/logout", methods=["GET", "POST"])
 def logout():
     cookie, _ = getauthcookie()
+    resp = flask.make_response("You have been logged out")
     if cookie:
         delcookie(cookie)
-    return "You have been logged out"
+        resp.set_cookie(
+            COOKIE, "", domain=COOKIE_DOMAIN, max_age=0, secure=COOKIE_SECURE
+        )
+    return resp
 
 
 def checkotp(user, otp):
