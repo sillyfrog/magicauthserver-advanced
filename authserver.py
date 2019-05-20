@@ -24,6 +24,8 @@ AUTHFORM = "authform.html"
 
 # The expiry time of cookies set with out authenticating
 UNAUTH_TIMEOUT = 900
+# The expiry time of an inactive cookie, cache updated every check
+AUTHED_TIMEOUT = 35 * 24 * 3600  # 35 days
 authdcookies = set()
 
 r = redis.Redis(
@@ -65,7 +67,13 @@ error("Verify OTP Code");
 def index(path):
     cookie, username = getauthcookie()
     if username:
-        return "Auth {}".format(username)
+        # Check the user is still real
+        user = WebUser.query.filter_by(username=username).first()
+        if user:
+            return "Auth {}".format(user.username)
+        else:
+            print("Authed user no longer valid: {}".format(username))
+            delcookie(cookie)
 
     basicauth = request.headers.get("Authorization")
     if basicauth:
@@ -228,7 +236,7 @@ def manageself():
         return "ok"
 
 
-@app.route("/magicauth/logout", methods=["GET", "POST"])
+@app.route("/magicauth/users/logout", methods=["GET", "POST"])
 def logout():
     cookie, _ = getauthcookie()
     if cookie:
@@ -270,8 +278,10 @@ def addotp(user):
 def getauthcookie():
     cookie = request.cookies.get(COOKIE)
     if cookie:
-        username = r.get("cookie_{}".format(cookie))
+        key = "cookie_{}".format(cookie)
+        username = r.get(key)
         if username is not None:
+            r.expire(key, AUTHED_TIMEOUT)
             return cookie, username
     return None, None
 
@@ -279,6 +289,7 @@ def getauthcookie():
 def setauthcookie(cookie, username):
     key = "cookie_{}".format(cookie)
     r.set(key, username)
+    r.expire(key, AUTHED_TIMEOUT)
 
 
 def gencookie():
