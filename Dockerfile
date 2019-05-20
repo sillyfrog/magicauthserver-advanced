@@ -7,5 +7,4 @@ COPY authserver.py /
 COPY templates /templates/
 COPY auth /auth/
 WORKDIR /
-#CMD ["./authserver.py"]
-CMD ["sleep", "58888"]
+CMD ["./authserver.py"]
