@@ -114,8 +114,7 @@ def submit(**path):
                 setauthcookie(cookie, user.username)
                 return "location.reload();", 401
             else:
-                time.sleep(0.5)
-                return "error('Wrong username, password or code');", 401
+                time.sleep(1)
     else:
         time.sleep(1)
         resp = flask.make_response(
@@ -123,6 +122,7 @@ def submit(**path):
         )
         setcookie(resp)
         return resp, 401
+    return "error('Wrong username, password or code');", 401
 
 
 def setcookie(resp):
