@@ -15,6 +15,7 @@ import base64
 from io import BytesIO
 import time
 import redis
+import json
 
 from auth import config
 
@@ -22,7 +23,7 @@ COOKIE = "magicproxyauth"
 AUTHFORM = "authform.html"
 
 # The expiry time of cookies set with out authenticating
-UNAUTH_TIMEOUT = 60  # XXX
+UNAUTH_TIMEOUT = 900
 authdcookies = set()
 
 r = redis.Redis(
@@ -33,6 +34,9 @@ app = flask.Flask(__name__)
 app.config["SQLALCHEMY_DATABASE_URI"] = config.getconf("db_uri", raiseerror=True)
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 db = SQLAlchemy(app)
+
+ADMIN_LEVEL = 100
+NORMAL_LEVEL = 0
 
 
 class WebUser(db.Model):
@@ -78,14 +82,7 @@ def index(path):
 
     resp = flask.make_response(flask.render_template("authform.jinja"))
     if cookie is None:
-        authcookie = gencookie()
-        resp.set_cookie(
-            COOKIE,
-            authcookie,
-            domain=COOKIE_DOMAIN,
-            max_age=2147483647,
-            secure=COOKIE_SECURE,
-        )
+        setcookie(resp)
     return resp, 401
 
 
@@ -121,7 +118,122 @@ def submit(**path):
                 return "error('Wrong username, password or code');", 401
     else:
         time.sleep(1)
-        return "error('Wrong username/password or cookie not set');", 401
+        resp = flask.make_response(
+            "error('Wrong username/password or cookie not set');"
+        )
+        setcookie(resp)
+        return resp, 401
+
+
+def setcookie(resp):
+    authcookie = gencookie()
+    resp.set_cookie(
+        COOKIE,
+        authcookie,
+        domain=COOKIE_DOMAIN,
+        max_age=2147483647,
+        secure=COOKIE_SECURE,
+    )
+
+
+@app.route("/magicauth/users/manage", methods=["GET", "POST"])
+def manageusers():
+    cookie, username = getauthcookie()
+    if not username:
+        # Shouldn't get here, but it's possible
+        return index(None)
+    user = WebUser.query.filter_by(username=username).first()
+    if not user or user.level < ADMIN_LEVEL:
+        return "You must be admin to access this page."
+    if request.method == "GET":
+        return flask.render_template("users.html", activeuser=json.dumps(user.username))
+    elif request.method == "POST":
+        content = request.json
+        ret = {"ok": False}
+        try:
+            if content.get("action") == "getusers":
+                data = []
+                for user in WebUser.query.order_by(WebUser.username).all():
+                    data.append(
+                        {
+                            "username": user.username,
+                            "level": user.level,
+                            "tokenset": bool(user.otp),
+                        }
+                    )
+                ret["users"] = data
+                ret["ok"] = True
+
+            elif content.get("action") == "adduser":
+                password = secrets.token_urlsafe()[:8]
+                addlogin(content["username"], password, content["level"] == ADMIN_LEVEL)
+                ret[
+                    "msg"
+                ] = "User <strong>{}</strong> added, their new password is: <span style=\"font-family: 'Courier New', Courier, monospace;\">{}</span>".format(
+                    content["username"], password
+                )
+                ret["ok"] = True
+
+            elif content.get("action") == "deleteuser":
+                deleteuser(content["username"])
+                ret["msg"] = "User <strong>{}</strong> deleted".format(
+                    content["username"]
+                )
+                ret["ok"] = True
+
+            elif content.get("action") == "makeadmin":
+                updateuserlevel(content["username"], ADMIN_LEVEL)
+                ret["msg"] = "User <strong>{}</strong> is now Admin".format(
+                    content["username"]
+                )
+                ret["ok"] = True
+
+            elif content.get("action") == "demoteadmin":
+                updateuserlevel(content["username"], NORMAL_LEVEL)
+                ret["msg"] = "User <strong>{}</strong> is no longer an Admin".format(
+                    content["username"]
+                )
+                ret["ok"] = True
+
+            elif content.get("action") == "resettoken":
+                resetusertoken(content["username"])
+                ret["msg"] = "User <strong>{}</strong> Token Reset".format(
+                    content["username"]
+                )
+                ret["ok"] = True
+
+        except Exception as e:
+            ret["msg"] = "<strong>Error!</strong>: {}".format(e)
+        return flask.jsonify(ret)
+
+
+@app.route("/magicauth/users/self", methods=["GET", "POST"])
+def manageself():
+    cookie, username = getauthcookie()
+    if not username:
+        # Shouldn't get here, but it's possible
+        return index(None)
+    if request.method == "GET":
+        return flask.render_template("self.html", activeuser=username)
+    elif request.method == "POST":
+        content = request.json
+        newpassword = content.get("newpassword")
+        if not newpassword:
+            return "No password", 401
+        if len(newpassword) < 8:
+            return "Too Short!", 401
+        if newpassword.lower() == "password":
+            return "That's not a password", 401
+        resetuserpassword(username, newpassword)
+        return "ok"
+
+
+@app.route("/magicauth/logout", methods=["GET", "POST"])
+def logout():
+    cookie, _ = getauthcookie()
+    if cookie:
+        delcookie(cookie)
+    return "You have been logged out"
 
 
 def checkotp(user, otp):
@@ -133,7 +245,7 @@ def checkotp(user, otp):
         if not otphash:
             return None
     totp = pyotp.TOTP(otphash)
-    verified = totp.verify(otp, valid_window=1)
+    verified = totp.verify(otp, valid_window=2)
     if r.exists(unverifiedkey):
         if verified:
             r.delete(unverifiedkey)
@@ -177,6 +289,11 @@ def gencookie():
     return newcookie
 
 
+def delcookie(cookie):
+    key = "cookie_{}".format(cookie)
+    r.delete(key)
+
+
 def checklogin(username, password):
     user = WebUser.query.filter_by(username=username.lower()).first()
     if user:
@@ -200,9 +317,9 @@ def addlogin(username, password, admin=False):
     username = username.lower()
     passwordhash = crypt.crypt(password, crypt.mksalt())
     if admin:
-        level = 100
+        level = ADMIN_LEVEL
     else:
-        level = 0
+        level = NORMAL_LEVEL
     user = WebUser(username=username, password=passwordhash, level=level)
     db.session.add(user)
     db.session.commit()
@@ -217,6 +334,30 @@ def addbasiclogin(username):
     db.session.add(user)
     db.session.commit()
     return password
+
+
+def deleteuser(username):
+    user = WebUser.query.filter_by(username=username.lower()).first()
+    db.session.delete(user)
+    db.session.commit()
+
+
+def updateuserlevel(username, level):
+    user = WebUser.query.filter_by(username=username.lower()).first()
+    user.level = level
+    db.session.commit()
+
+
+def resetuserpassword(username, clearpassword):
+    user = WebUser.query.filter_by(username=username.lower()).first()
+    user.password = crypt.crypt(clearpassword, crypt.mksalt())
+    db.session.commit()
+
+
+def resetusertoken(username):
+    user = WebUser.query.filter_by(username=username.lower()).first()
+    user.otp = None
+    db.session.commit()
 
 
 def promptpassword():
@@ -238,8 +379,12 @@ def loadconfig():
 def main():
     loadconfig()
 
+    db.create_all()
+
     parser = argparse.ArgumentParser()
     parser.add_argument("-a", "--adduser", action="store_true")
+    parser.add_argument("-r", "--resetpassword", action="store_true")
+    parser.add_argument("-t", "--resettoken", action="store_true")
     parser.add_argument(
         "--debug", action="store_true", help="Run flask in debug mode for development."
     )
@@ -248,6 +393,13 @@ def main():
         username = input("Username: ")
         password = promptpassword()
         addlogin(username, password, admin=True)
+    elif args.resetpassword:
+        username = input("Username: ")
+        password = promptpassword()
+        resetuserpassword(username, password)
+    elif args.resettoken:
+        username = input("Username: ")
+        resetusertoken(username)
     else:
         app.run(host="0.0.0.0", port=LISTEN_PORT, debug=args.debug)
 

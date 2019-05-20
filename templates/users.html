@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <!-- Required meta tags -->
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+
+  <!-- Bootstrap CSS -->
+  <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.2.1/css/bootstrap.min.css"
+    integrity="sha384-GJzZqFGwb1QTTN6wy59ffF1BuGJpLSa9DkKMp0DgiMDm4iYMj70gZWKYbI706tWS" crossorigin="anonymous">
+
+  <title>Manage Users</title>
+  <script>
+    const activeuser = {{ activeuser| safe }};
+  </script>
+</head>
+
+<body onLoad="updateUsers();">
+  <div class="container-fluid">
+    <h1>Manage Users</h1>
+
+    <div id="alert"></div>
+    <div class="row">
+      <div class="col-sm-6">
+        <div class="card">
+          <h5 class="card-header">
+            Add new user
+          </h5>
+          <div class="card-body">
+            <form class="bd-example" onSubmit="addUser(); return false;">
+              <fieldset>
+                <p>
+                  <label for="username">Username</label>
+                  <input type="text" id="username" placeholder="username" minlength="2"
+                    onChange="this.setCustomValidity('');">
+                </p>
+                <p>
+                  <label for="level">User Level</label>
+                  <select id="level">
+                    <option value="0" selected>Normal</option>
+                    <option value="100">Admin</option>
+                  </select>
+                </p>
+                <p>
+                  <button type="submit" class="btn btn-primary" id="adduser">Add User</button>
+                </p>
+              </fieldset>
+            </form>
+          </div>
+        </div>
+      </div>
+      <div class="col-sm-6">
+        <div class="card">
+          <h5 class="card-header">
+            Other Actions
+          </h5>
+          <div class="card-body">
+            <ul>
+              <li>
+                <a href="/" class="nav-link active">Home</a></li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h2>Manage Current Users</h2>
+    <table class="table-striped table table-hover">
+      <thead>
+        <tr>
+          <th>Username</th>
+          <th>Level</th>
+          <th>Admin</th>
+          <th>Token</th>
+          <th>Delete</th>
+        </tr>
+      </thead>
+      <tbody>
+      <tbody id="usersbody">
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Optional JavaScript -->
+  <script>
+    function sendAction(action, callback) {
+      fetch("manage", {
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        method: "POST",
+        body: JSON.stringify(action)
+      })
+        .then(function (response) {
+          return response.json();
+        })
+        .then(function (resp) {
+          if (callback) {
+            callback(resp);
+          }
+          if (resp.msg || resp.ok === false) {
+            if (resp.ok) {
+              showAlert(resp.msg, "success");
+            } else {
+              if (!resp.msg) {
+                resp.msg = "Error!";
+              }
+              showAlert(resp.msg, "danger");
+            }
+          }
+        })
+        .catch(function (error) {
+          showAlert("<strong>Error!</strong>: " + error, "danger");
+        });
+    }
+
+    function addUser() {
+      var username = $("#username").val();
+      if (username.length < 2) {
+        $("#username")[0].setCustomValidity("Username required");
+        return;
+      }
+      $('#adduser').text("Adding...");
+      var action = {
+        "action": "adduser",
+        "username": username,
+        "level": parseInt($('#level').val())
+      };
+      sendAction(action, function (resp) {
+        if (resp.ok) {
+          $('#adduser').text("Add User");
+          $("#username").val("");
+          updateUsers();
+        } else {
+          $('#adduser').text("Add User");
+        }
+      });
+    }
+
+    function actionUser(button, action, actiontxt) {
+      var username = button.dataset.username;
+      button.innerText = actiontxt;
+      var action = {
+        "action": action,
+        "username": username
+      };
+      sendAction(action, function (resp) {
+        updateUsers();
+      });
+    }
+
+    function deleteUser(button) {
+      actionUser(button, "deleteuser", "Deleting...");
+    }
+
+    function makeAdmin(button) {
+      actionUser(button, "makeadmin", "Applying...");
+    }
+
+    function demoteAdmin(button) {
+      actionUser(button, "demoteadmin", "Applying...");
+    }
+
+    function resetToken(button) {
+      actionUser(button, "resettoken", "Resetting...");
+    }
+
+    function fillTable(resp) {
+      if (!resp.ok) {
+        return;
+      }
+      users = resp['users'];
+      var body = document.getElementById("usersbody");
+      while (body.rows.length > 0) {
+        body.deleteRow(-1);
+      }
+      for (user of users) {
+        var row = body.insertRow(-1);
+        // Username
+        var cell = row.insertCell(-1);
+        cell.innerText = user.username;
+
+        // Level
+        cell = row.insertCell(-1);
+        if (user.level >= 100) {
+          cell.innerText = "Admin";
+        } else {
+          cell.innerText = "Normal";
+        }
+
+        // Actions
+        cell = row.insertCell(-1);
+        if (user.username != activeuser) {
+          var button = document.createElement("button");
+          button.dataset.username = user.username;
+          button.classList.add('btn');
+          if (user.level >= 100) {
+            button.classList.add('btn-primary');
+            button.setAttribute('onClick', 'demoteAdmin(this);');
+            button.innerText = "Remove Admin";
+          } else {
+            button.classList.add('btn-info');
+            button.setAttribute('onClick', 'makeAdmin(this);');
+            button.innerText = "Make Admin";
+          }
+          cell.appendChild(button);
+        } else {
+          cell.appendChild(document.createTextNode("Me"));
+        }
+
+        cell = row.insertCell(-1);
+        if (user.tokenset) {
+          var button = document.createElement("button");
+          button.dataset.username = user.username;
+          button.classList.add('btn');
+          button.classList.add('btn-danger');
+          button.setAttribute('onClick', 'resetToken(this);');
+          button.innerText = "Reset User Token";
+          cell.appendChild(button);
+        } else {
+          cell.appendChild(document.createTextNode("No Token Configured"));
+        }
+
+        cell = row.insertCell(-1);
+        if (user.username != activeuser) {
+          var button = document.createElement("button");
+          button.dataset.username = user.username;
+          button.classList.add('btn');
+          button.classList.add('btn-danger');
+          button.setAttribute('onClick', 'deleteUser(this);');
+          button.innerText = "Delete User";
+          cell.appendChild(button);
+        } else {
+          cell.appendChild(document.createTextNode("Me"));
+        }
+      }
+
+    }
+
+    function updateUsers() {
+      sendAction({ "action": "getusers" }, fillTable);
+    }
+
+
+    function showAlert(msg, type = "warning") {
+      var html = '<div class="alert alert-' + type + ' alert-dismissible fade show" role="alert">' +
+        '' + msg +
+        '<button type="button" class="close" data-dismiss="alert" aria-label="Close">' +
+        '<span aria-hidden="true">&times;</span>' +
+        '</button>' +
+        '</div>';
+      $('#alert').append(html);
+    }
+  </script>
+  <!-- jQuery first, then Popper.js, then Bootstrap JS -->
+  <script src="https://code.jquery.com/jquery-3.3.1.slim.min.js"
+    integrity="sha384-q8i/X+965DzO0rT7abK41JStQIAqVgRVzpbzo5smXKp4YfRvH+8abtTE1Pi6jizo"
+    crossorigin="anonymous"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/popper.js/1.14.6/umd/popper.min.js"
+    integrity="sha384-wHAiFfRlMFy6i5SRaxvfOCifBUQy1xHdJ/yoi7FRNXMRBu5WHdZYu1hA6ZOblgut"
+    crossorigin="anonymous"></script>
+  <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.2.1/js/bootstrap.min.js"
+    integrity="sha384-B0UglyR+jN6CkvvICOB2joaf5I4l3gm9GU6Hc1og6Ls7i6U/mkkaduKaBhlAXv9k"
+    crossorigin="anonymous"></script>
+</body>
+
+</html>

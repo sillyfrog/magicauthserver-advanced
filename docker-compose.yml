@@ -34,3 +34,5 @@ services:
       restart_policy:
         condition: any
       endpoint_mode: dnsrr
+    volumes:
+      - "/Users/tdavis/Downloads/redis:/data"
