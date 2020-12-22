@@ -30,6 +30,8 @@ def getbool(confname, default=False, raiseerror=False):
         conf = conf.lower()
         if conf == "true":
             return True
+        elif conf == "false":
+            return False
     return bool(conf)
 
 

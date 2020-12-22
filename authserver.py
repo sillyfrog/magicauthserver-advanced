@@ -2,13 +2,13 @@
 
 import flask
 from flask import request
+from flask import Response
 from flask_sqlalchemy import SQLAlchemy
 import pyotp
 import qrcode
 import argparse
 import crypt
 import getpass
-import os
 import secrets
 import sys
 import base64
@@ -16,17 +16,21 @@ from io import BytesIO
 import time
 import redis
 import json
+import logging
+import ipaddress
 
 from auth import config
 
-COOKIE = "magicproxyauth"
+COOKIE_BASE_NAME = "magicproxyauth-"
 AUTHFORM = "authform.html"
 
 # The expiry time of cookies set with out authenticating
 UNAUTH_TIMEOUT = 900
 # The expiry time of an inactive cookie, cache updated every check
-AUTHED_TIMEOUT = 35 * 24 * 3600  # 35 days
+AUTHED_TIMEOUT = 365 * 24 * 3600  # One year days
 authdcookies = set()
+
+log = logging.getLogger(__name__)
 
 r = redis.Redis(
     host=config.getconf("redis_host", default="redis"), decode_responses=True
@@ -39,6 +43,10 @@ db = SQLAlchemy(app)
 
 ADMIN_LEVEL = 100
 NORMAL_LEVEL = 0
+
+
+class FixedLocationResponse(Response):
+    autocorrect_location_header = False
 
 
 class WebUser(db.Model):
@@ -65,12 +73,39 @@ error("Verify OTP Code");
 @app.route("/", defaults={"path": ""}, methods=["GET"])
 @app.route("/<path:path>", methods=["GET"])
 def index(path):
+    # First check if the IP is whitelisted
+    srcip = request.headers.get("X-Forwarded-For")
+    if srcip and TRUSTED_NETWORKS:
+        srcip = ipaddress.ip_address(srcip)
+        for trustednet in TRUSTED_NETWORKS:
+            if srcip in trustednet:
+                return "Trusted_Net"
+
+    x_username = request.headers.get("X-set-username")
+    x_password = request.headers.get("X-set-password")
+    x_otp = request.headers.get("X-set-otp")
+    if x_username is not None and x_password is not None and x_otp is not None:
+        return newlogin(x_username, x_password, x_otp)
+
     cookie, username = getauthcookie()
     if username:
         # Check the user is still real
         user = WebUser.query.filter_by(username=username).first()
         if user:
-            return "Auth {}".format(user.username)
+            if (
+                request.headers.get("Host") in MY_DOMAINS
+                or request.headers.get("X-Forwarded-Host") in MY_DOMAINS
+            ):
+                return """
+                <html><head><meta http-equiv="Refresh" content="0; url='/magicauth/users/self'" />
+                </head><body>Redirecting...</body></html>"""
+                # return flask.redirect(
+                #     "/magicauth/users/self", code=302, Response=FixedLocationResponse
+                # )
+
+            resp = flask.make_response("Auth {}".format(user.username))
+            resp.headers["x-forwardauth-name"] = user.username
+            return resp
         else:
             print("Authed user no longer valid: {}".format(username))
             delcookie(cookie)
@@ -83,7 +118,7 @@ def index(path):
                 try:
                     details = base64.b64decode(parts[1]).decode()
                     username, password = details.split(":", 1)
-                except:
+                except Exception:
                     username, password = (None, None)
                 if checkbasicauthlogin(username, password):
                     return "Auth"
@@ -100,6 +135,10 @@ def submit(**path):
     username = request.headers.get("X-set-username")
     password = request.headers.get("X-set-password")
     otp = request.headers.get("X-set-otp")
+    return newlogin(username, password, otp)
+
+
+def newlogin(username, password, otp):
     cookie, _ = getauthcookie()
 
     if username:
@@ -109,7 +148,7 @@ def submit(**path):
         user = checklogin(username, password)
         if user:
             otpcheck = checkotp(user, otp)
-            if otpcheck == None:
+            if otpcheck is None:
                 # Username and password is OK, but we need to create a OTP for them
                 otpuri = addotp(user)
                 img = qrcode.make(otpuri)
@@ -118,7 +157,7 @@ def submit(**path):
                 img_str = base64.b64encode(buf.getvalue()).decode()
                 return OTP_TEMPLATE.format(img_str), 401
 
-            elif otpcheck == True:
+            elif otpcheck is True:
                 setauthcookie(cookie, user.username)
                 return "location.reload();", 401
             else:
@@ -135,13 +174,7 @@ def submit(**path):
 
 def setcookie(resp):
     authcookie = gencookie()
-    resp.set_cookie(
-        COOKIE,
-        authcookie,
-        domain=COOKIE_DOMAIN,
-        max_age=2147483647,
-        secure=COOKIE_SECURE,
-    )
+    resp.set_cookie(COOKIE_NAME, authcookie, domain=COOKIE_DOMAIN, max_age=2147483647)
 
 
 @app.route("/magicauth/users/manage", methods=["GET", "POST"])
@@ -221,8 +254,10 @@ def manageself():
     if not username:
         # Shouldn't get here, but it's possible
         return index(None)
+    user = WebUser.query.filter_by(username=username).first()
+    admin = user.level >= ADMIN_LEVEL
     if request.method == "GET":
-        return flask.render_template("self.html", activeuser=username)
+        return flask.render_template("self.html", activeuser=username, admin=admin)
     elif request.method == "POST":
         content = request.json
         newpassword = content.get("newpassword")
@@ -243,9 +278,15 @@ def logout():
     if cookie:
         delcookie(cookie)
         resp.set_cookie(
-            COOKIE, "", domain=COOKIE_DOMAIN, max_age=0, secure=COOKIE_SECURE
+            COOKIE_NAME, "", domain=COOKIE_DOMAIN, max_age=0, secure=COOKIE_SECURE
         )
     return resp
+
+
+@app.route("/crash", methods=["GET", "POST"])
+def crash():
+    x = 0 / 0
+    return x
 
 
 def checkotp(user, otp):
@@ -280,7 +321,7 @@ def addotp(user):
 
 
 def getauthcookie():
-    cookie = request.cookies.get(COOKIE)
+    cookie = request.cookies.get(COOKIE_NAME)
     if cookie:
         key = "cookie_{}".format(cookie)
         username = r.get(key)
@@ -385,9 +426,26 @@ def promptpassword():
 
 
 def loadconfig():
-    global COOKIE_DOMAIN, COOKIE_SECURE, LISTEN_PORT
+    global COOKIE_NAME, COOKIE_DOMAIN, COOKIE_SECURE, LISTEN_PORT, MY_DOMAINS, TRUSTED_NETWORKS
     COOKIE_DOMAIN = config.getconf("cookie_domain", raiseerror=True)
+    COOKIE_NAME = COOKIE_BASE_NAME + COOKIE_DOMAIN
     COOKIE_SECURE = config.getbool("cookie_secure")
+    mydomainsstr = config.getconf("my_domains")
+    MY_DOMAINS = []
+    if mydomainsstr is not None:
+        domains = mydomainsstr.split(",")
+        for domain in domains:
+            domain = domain.strip()
+            if domain:
+                MY_DOMAINS.append(domain)
+    trustednetsstr = config.getconf("trusted_nets")
+    TRUSTED_NETWORKS = []
+    if trustednetsstr is not None:
+        nets = trustednetsstr.split(",")
+        for net in nets:
+            net = net.strip()
+            if net:
+                TRUSTED_NETWORKS.append(ipaddress.ip_network(net, strict=False))
     LISTEN_PORT = config.getint("listen_port", 80)
 
 
