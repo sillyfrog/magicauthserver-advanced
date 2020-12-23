@@ -2,7 +2,7 @@
 
 A more authentication server to work with my [Magic Reverse Proxy](https://github.com/sillyfrog/magicreverseproxy), including support for two factor auth with [Authy](https://authy.com/)
 
-A `Dockerfile` is included, this pulls in all of the dependancies via pip. This version stores details in a Postgres Database, and caches keys/cookies in Redis.
+A `Dockerfile` is included, this pulls in all of the dependencies via pip. This version stores details in a Postgres Database, and caches keys/cookies in Redis.
 
 ## Database setup
 
@@ -59,21 +59,21 @@ If you have the `COOKIE_DOMAIN` set to `example.com`, then you could have a numb
 
 ### COOKIE_SECURE
 
-If set to "True", then the secure flag will be set on any cookies that are sent to the client. This is recommended for prodeuction.
+If set to "True", then the secure flag will be set on any cookies that are sent to the client. This is recommended for production.
 
 ### MY_DOMAINS
 
-A comma separated list of domains which point to the actual server instance. These domains, if visited in a browser, allow for user management (assuming you have administration rights), or for a user to reset their password. A user can also manually navigate to `/magicauth/users/self` at any authenticated domain to manage their own account.
+A comma separated list of domains which point to the actual server instance. These domains, if visited in a browser, allow for user management (assuming you have administration rights), or for a user to reset their password. A user can also manually navigate to `/magicauth/users/self` at any authenticated domain to manage their own account (with an appropriate path redirect configured in Traefik).
 
 ### TRUSTED_NETS
 
-A comma separated list of IP networks that are tursted and will _not_ required authentication. If a user visits from one of these listed IP networks, they will instantly be granted access. This uses the `X-Forwarded-For` header, so ensure the upstream proxy correctly filters and sets this header if using the feature. The network format is anything supported by the Python 3 `ipaddress.ip_network` function (with strict set to `False`). For example, `10.0.0.0/8`. IPv6 should also work, but has not been tested.
+A comma separated list of IP networks that are trusted and will _not_ required authentication. If a user visits from one of these listed IP networks, they will instantly be granted access. This uses the `X-Forwarded-For` header, so ensure the upstream proxy correctly filters and sets this header if using the feature. The network format is anything supported by the Python 3 `ipaddress.ip_network` function (with strict set to `False`). For example, `10.0.0.0/8`. IPv6 should also work, but has not been tested.
 
 ## authform.html
 
 The included `authform.html` in the templates directory is a simple username and password from, that sends the auth details back using AJAX. The implementation is this way because of how nginx does its proxying/caching with the auth server. Using a traditional POST caused all sorts of weird reliability issues (this could have been anything from Docker buffer sizes to shell buffers to something else). This method worked well for me, so it stayed.
 
-That said, the HTML/CSS of the from can be totally customised as you require.
+That said, the HTML/CSS of the from can be totally customized as you require.
 
 ## Swarm Example
 

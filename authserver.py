@@ -10,7 +10,6 @@ import argparse
 import crypt
 import getpass
 import secrets
-import sys
 import base64
 from io import BytesIO
 import time
@@ -286,7 +285,7 @@ def logout():
 @app.route("/crash", methods=["GET", "POST"])
 def crash():
     x = 0 / 0
-    return x
+    return str(x)
 
 
 def checkotp(user, otp):
@@ -427,8 +426,8 @@ def promptpassword():
 
 def loadconfig():
     global COOKIE_NAME, COOKIE_DOMAIN, COOKIE_SECURE, LISTEN_PORT, MY_DOMAINS, TRUSTED_NETWORKS
-    COOKIE_DOMAIN = config.getconf("cookie_domain", raiseerror=True)
-    COOKIE_NAME = COOKIE_BASE_NAME + COOKIE_DOMAIN
+    COOKIE_DOMAIN = config.getconf("cookie_domain")
+    COOKIE_NAME = COOKIE_BASE_NAME + str(COOKIE_DOMAIN)
     COOKIE_SECURE = config.getbool("cookie_secure")
     mydomainsstr = config.getconf("my_domains")
     MY_DOMAINS = []
@@ -475,11 +474,6 @@ def main():
         resetusertoken(username)
     else:
         app.run(host="0.0.0.0", port=LISTEN_PORT, debug=args.debug)
-
-
-def log(msg):
-    sys.stderr.write("{}\n".format(msg))
-    sys.stderr.flush()
 
 
 if __name__ == "__main__":
