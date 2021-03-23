@@ -69,9 +69,17 @@ A comma separated list of domains which point to the actual server instance. The
 
 A comma separated list of IP networks that are trusted and will _not_ required authentication. If a user visits from one of these listed IP networks, they will instantly be granted access. This uses the `X-Forwarded-For` header, so ensure the upstream proxy correctly filters and sets this header if using the feature. The network format is anything supported by the Python 3 `ipaddress.ip_network` function (with strict set to `False`). For example, `10.0.0.0/8`. IPv6 should also work, but has not been tested.
 
-## authform.html
+### HOME_PATH
 
-The included `authform.html` in the templates directory is a simple username and password from, that sends the auth details back using AJAX. The implementation is this way because of how nginx does its proxying/caching with the auth server. Using a traditional POST caused all sorts of weird reliability issues (this could have been anything from Docker buffer sizes to shell buffers to something else). This method worked well for me, so it stayed.
+Optional. This is the path that you want the "Home" link to point to. By default it will go to "/". You can put in a full URL if desired.
+
+### RECAPTCHA_SITE_KEY / RECAPTCHA_SECRET_KEY
+
+Optional. If set, will present the user with a [Google reCAPTCHA v2](https://developers.google.com/recaptcha) at login time. When setting up users, there is also an option to "Allow reCAPTCHA only login" - this means you can selectively allow users to login without 2 Factor Auth. However for this to work, the `RECAPTCHA_SITE_KEY` and `RECAPTCHA_SECRET_KEY` _must_ be set. To create the keys, visit: http://www.google.com/recaptcha/admin
+
+## authform.jinja
+
+The included `authform.jinja` in the templates directory is a simple username and password from, that sends the auth details back using AJAX. The implementation is this way because of how nginx does its proxying/caching with the auth server. Using a traditional POST caused all sorts of weird reliability issues (this could have been anything from Docker buffer sizes to shell buffers to something else). This method worked well for me, so it stayed.
 
 That said, the HTML/CSS of the from can be totally customized as you require.
 

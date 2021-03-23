@@ -17,11 +17,12 @@ import redis
 import json
 import logging
 import ipaddress
+import requests
 
 from auth import config
 
 COOKIE_BASE_NAME = "magicproxyauth-"
-AUTHFORM = "authform.html"
+AUTHFORM = "authform.jinja"
 
 # The expiry time of cookies set with out authenticating
 UNAUTH_TIMEOUT = 900
@@ -35,6 +36,11 @@ r = redis.Redis(
     host=config.getconf("redis_host", default="redis"), decode_responses=True
 )
 
+RECAPTCHA_SITE_KEY = config.getconf("recaptcha_site_key")
+RECAPTCHA_SECRET_KEY = config.getconf("recaptcha_secret_key")
+
+HOME_PATH = config.getconf("home_path", "/")
+
 app = flask.Flask(__name__)
 app.config["SQLALCHEMY_DATABASE_URI"] = config.getconf("db_uri", raiseerror=True)
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
@@ -42,6 +48,9 @@ db = SQLAlchemy(app)
 
 ADMIN_LEVEL = 100
 NORMAL_LEVEL = 0
+
+CAPTCHA_VERIFY_URL = "https://www.google.com/recaptcha/api/siteverify"
+OTP_RECAPTCHA = "recaptcha"
 
 
 class FixedLocationResponse(Response):
@@ -65,7 +74,7 @@ class BasicUser(db.Model):
 OTP_TEMPLATE = """
 e = document.getElementById("forotp");
 e.innerHTML="Scan this code in your Authy app:<br><img src='data:image/png;base64,{}'>";
-error("Verify OTP Code");
+error("Verify Authy Code");
 """
 
 
@@ -83,8 +92,13 @@ def index(path):
     x_username = request.headers.get("X-set-username")
     x_password = request.headers.get("X-set-password")
     x_otp = request.headers.get("X-set-otp")
-    if x_username is not None and x_password is not None and x_otp is not None:
-        return newlogin(x_username, x_password, x_otp)
+    recaptcha_response = request.headers.get("X-set-recaptcha")
+    if (
+        x_username is not None
+        and x_password is not None
+        and (x_otp is not None or recaptcha_response is not None)
+    ):
+        return newlogin(x_username, x_password, x_otp, recaptcha_response)
 
     cookie, username = getauthcookie()
     if username:
@@ -122,7 +136,9 @@ def index(path):
                 if checkbasicauthlogin(username, password):
                     return "Auth"
 
-    resp = flask.make_response(flask.render_template("authform.jinja"))
+    resp = flask.make_response(
+        flask.render_template(AUTHFORM, recaptchasitekey=RECAPTCHA_SITE_KEY)
+    )
     if cookie is None:
         setcookie(resp)
     return resp, 401
@@ -131,44 +147,58 @@ def index(path):
 @app.route("/", defaults={"path": ""}, methods=["POST"])
 @app.route("/<path:path>", methods=["POST"])
 def submit(**path):
+    srcip = request.headers.get("X-Forwarded-For", "").split(",")[0]
     username = request.headers.get("X-set-username")
     password = request.headers.get("X-set-password")
     otp = request.headers.get("X-set-otp")
-    return newlogin(username, password, otp)
+    recaptcha_response = request.headers.get("X-set-recaptcha")
+    return newlogin(username, password, otp, recaptcha_response, srcip)
 
 
-def newlogin(username, password, otp):
+def newlogin(username, password, otp, recaptcha_response, srcip=None):
     cookie, _ = getauthcookie()
+
+    def loginok(user):
+        setauthcookie(cookie, user.username)
+        return "location.reload();", 401
+
+    def error(msg):
+        resp = flask.make_response(f"error({json.dumps(msg)});")
+        setcookie(resp)
+        return resp, 401
 
     if username:
         username = username.lower()
 
     if cookie:
+        if RECAPTCHA_SITE_KEY and not validatecaptcha(recaptcha_response, srcip):
+            return error("Invalid reCAPTCHA")
         user = checklogin(username, password)
         if user:
             otpcheck = checkotp(user, otp)
             if otpcheck is None:
                 # Username and password is OK, but we need to create a OTP for them
-                otpuri = addotp(user)
-                img = qrcode.make(otpuri)
-                buf = BytesIO()
-                img.save(buf, format="PNG")
-                img_str = base64.b64encode(buf.getvalue()).decode()
-                return OTP_TEMPLATE.format(img_str), 401
+                # or login via recaptcha
+                if RECAPTCHA_SITE_KEY and user.otp == OTP_RECAPTCHA:
+                    # This user can login using recaptcha only
+                    return loginok(user)
+                else:
+                    otpuri = addotp(user)
+                    img = qrcode.make(otpuri)
+                    buf = BytesIO()
+                    img.save(buf, format="PNG")
+                    img_str = base64.b64encode(buf.getvalue()).decode()
+                    return OTP_TEMPLATE.format(img_str), 401
 
             elif otpcheck is True:
-                setauthcookie(cookie, user.username)
-                return "location.reload();", 401
+                return loginok(user)
             else:
                 time.sleep(1)
     else:
         time.sleep(1)
-        resp = flask.make_response(
-            "error('Wrong username/password or cookie not set');"
-        )
-        setcookie(resp)
-        return resp, 401
-    return "error('Wrong username, password or code');", 401
+        return error("Wrong username/password or cookie not set")
+
+    return error("Wrong username, password or code")
 
 
 def setcookie(resp):
@@ -186,7 +216,9 @@ def manageusers():
     if not user or user.level < ADMIN_LEVEL:
         return "You must be admin to access this page."
     if request.method == "GET":
-        return flask.render_template("users.html", activeuser=json.dumps(user.username))
+        return flask.render_template(
+            "users.html", activeuser=json.dumps(user.username), homepath=HOME_PATH
+        )
     elif request.method == "POST":
         content = request.json
         ret = {"ok": False}
@@ -194,11 +226,19 @@ def manageusers():
             if content.get("action") == "getusers":
                 data = []
                 for user in WebUser.query.order_by(WebUser.username).all():
+                    otp = False
+                    recaptcha = False
+                    if user.otp:
+                        if user.otp == OTP_RECAPTCHA:
+                            recaptcha = True
+                        else:
+                            otp = True
                     data.append(
                         {
                             "username": user.username,
                             "level": user.level,
-                            "tokenset": bool(user.otp),
+                            "tokenset": otp,
+                            "allowrecaptcha": recaptcha,
                         }
                     )
                 ret["users"] = data
@@ -206,7 +246,12 @@ def manageusers():
 
             elif content.get("action") == "adduser":
                 password = secrets.token_urlsafe()[:8]
-                addlogin(content["username"], password, content["level"] == ADMIN_LEVEL)
+                addlogin(
+                    content["username"],
+                    password,
+                    content["level"] == ADMIN_LEVEL,
+                    content["allowrecaptcha"],
+                )
                 ret[
                     "msg"
                 ] = "User <strong>{}</strong> added, their new password is: <span style=\"font-family: 'Courier New', Courier, monospace;\">{}</span>".format(
@@ -256,7 +301,9 @@ def manageself():
     user = WebUser.query.filter_by(username=username).first()
     admin = user.level >= ADMIN_LEVEL
     if request.method == "GET":
-        return flask.render_template("self.html", activeuser=username, admin=admin)
+        return flask.render_template(
+            "self.html", activeuser=username, admin=admin, homepath=HOME_PATH
+        )
     elif request.method == "POST":
         content = request.json
         newpassword = content.get("newpassword")
@@ -297,7 +344,10 @@ def checkotp(user, otp):
         if not otphash:
             return None
     totp = pyotp.TOTP(otphash)
-    verified = totp.verify(otp, valid_window=2)
+    try:
+        verified = totp.verify(otp, valid_window=2)
+    except:
+        return None
     if r.exists(unverifiedkey):
         if verified:
             r.delete(unverifiedkey)
@@ -368,14 +418,18 @@ def checkbasicauthlogin(username, password):
     return False
 
 
-def addlogin(username, password, admin=False):
+def addlogin(username, password, admin=False, allowrecaptcha=False):
     username = username.lower()
     passwordhash = crypt.crypt(password, crypt.mksalt())
     if admin:
         level = ADMIN_LEVEL
     else:
         level = NORMAL_LEVEL
-    user = WebUser(username=username, password=passwordhash, level=level)
+    if allowrecaptcha:
+        otp = OTP_RECAPTCHA
+    else:
+        otp = None
+    user = WebUser(username=username, password=passwordhash, level=level, otp=otp)
     db.session.add(user)
     db.session.commit()
 
@@ -446,6 +500,18 @@ def loadconfig():
             if net:
                 TRUSTED_NETWORKS.append(ipaddress.ip_network(net, strict=False))
     LISTEN_PORT = config.getint("listen_port", 80)
+
+
+def validatecaptcha(response, srcip=None):
+    args = {"secret": RECAPTCHA_SECRET_KEY, "response": response}
+    if srcip:
+        args["remoteip"] = srcip
+    r = requests.post(CAPTCHA_VERIFY_URL, args)
+    response = r.json()
+    if response["success"]:
+        return True
+    print("Failed Verification:", response)
+    return False
 
 
 def main():

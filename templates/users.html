@@ -43,6 +43,10 @@
                   </select>
                 </p>
                 <p>
+                  <label for="recaptcha">Allow reCAPTCHA only login</label>
+                  <input type="checkbox" id="allowrecaptcha">
+                </p>
+                <p>
                   <button type="submit" class="btn btn-primary" id="adduser">Add User</button>
                 </p>
               </fieldset>
@@ -58,9 +62,11 @@
           <div class="card-body">
             <ul>
               <li>
-                <a href="/" class="nav-link active">Home</a></li>
+                <a href="{{ homepath }}" class="nav-link active">Home</a>
+              </li>
               <li>
-                <a href="self" class="nav-link active">Manage Self</a></li>
+                <a href="self" class="nav-link active">Manage Self</a>
+              </li>
             </ul>
           </div>
         </div>
@@ -127,7 +133,8 @@
       var action = {
         "action": "adduser",
         "username": username,
-        "level": parseInt($('#level').val())
+        "level": parseInt($('#level').val()),
+        "allowrecaptcha": allowrecaptcha.checked
       };
       sendAction(action, function (resp) {
         if (resp.ok) {
@@ -212,7 +219,10 @@
         }
 
         cell = row.insertCell(-1);
-        if (user.tokenset) {
+        if (user.allowrecaptcha) {
+          cell.innerText = "Allow reCAPTCHA Only";
+        }
+        else if (user.tokenset) {
           var button = document.createElement("button");
           button.dataset.username = user.username;
           button.classList.add('btn');

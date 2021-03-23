@@ -1,5 +1,6 @@
 proxylogins
 build.sh
+deploy-to-core.sh
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

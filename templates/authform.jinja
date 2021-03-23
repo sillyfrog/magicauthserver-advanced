@@ -172,15 +172,14 @@ input[type=submit] {
           var DONE = this.DONE || 4;
           if (this.readyState === DONE){
               eval(this.responseText);
+              grecaptcha.reset();
           }
       };
       request.open('POST', '/magicauth/login', true);
-      request.setRequestHeader('X-set-username',
-        document.getElementById('username').value);
-      request.setRequestHeader('X-set-password',
-        document.getElementById('password').value);
-      request.setRequestHeader('X-set-otp',
-        document.getElementById('otp').value);
+      request.setRequestHeader('X-set-username', document.getElementById('username').value);
+      request.setRequestHeader('X-set-password', document.getElementById('password').value);
+      request.setRequestHeader('X-set-otp', document.getElementById('otp').value);
+      request.setRequestHeader('X-set-recaptcha', grecaptcha.getResponse());
       request.send(null);
 
       document.getElementById("error").innerHTML = "...";
@@ -194,6 +193,8 @@ input[type=submit] {
     }
   </script>
 
+  <script src="https://www.google.com/recaptcha/api.js" async defer></script>
+
 </head>
 <body>
   <section class="container">
@@ -202,8 +203,12 @@ input[type=submit] {
       <form method="post" onSubmit="return logmein();">
         <p><input type="text" id="username" value="" placeholder="Username"></p>
         <p><input type="password" id="password" value="" placeholder="Password"></p>
-        <p><input type="text" id="otp" value="" placeholder="Authy Code"></p>
-        <small>Leave blank if not yet configured</small>
+        <p><input type="text" id="otp" value="" placeholder="Authy Code"><br />
+        <small>Leave blank if not yet configured</small></p>
+        
+        {% if recaptchasitekey %}
+          <div class="g-recaptcha" data-sitekey="{{ recaptchasitekey }}"></div>
+        {% endif %}
         <div id="error"></div>
         <p class="submit"><input type="submit" name="commit" value="Login"></p>
       </form>
