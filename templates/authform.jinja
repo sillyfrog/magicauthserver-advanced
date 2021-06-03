@@ -172,14 +172,18 @@ input[type=submit] {
           var DONE = this.DONE || 4;
           if (this.readyState === DONE){
               eval(this.responseText);
-              grecaptcha.reset();
+              {% if recaptchasitekey %}
+                grecaptcha.reset();
+              {% endif %}
           }
       };
       request.open('POST', '/magicauth/login', true);
       request.setRequestHeader('X-set-username', document.getElementById('username').value);
       request.setRequestHeader('X-set-password', document.getElementById('password').value);
       request.setRequestHeader('X-set-otp', document.getElementById('otp').value);
-      request.setRequestHeader('X-set-recaptcha', grecaptcha.getResponse());
+      {% if recaptchasitekey %}
+        request.setRequestHeader('X-set-recaptcha', grecaptcha.getResponse());
+      {% endif %}
       request.send(null);
 
       document.getElementById("error").innerHTML = "...";
@@ -193,7 +197,9 @@ input[type=submit] {
     }
   </script>
 
-  <script src="https://www.google.com/recaptcha/api.js" async defer></script>
+  {% if recaptchasitekey %}
+    <script src="https://www.google.com/recaptcha/api.js" async defer></script>
+  {% endif %}
 
 </head>
 <body>

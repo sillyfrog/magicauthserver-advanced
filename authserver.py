@@ -52,6 +52,8 @@ NORMAL_LEVEL = 0
 CAPTCHA_VERIFY_URL = "https://www.google.com/recaptcha/api/siteverify"
 OTP_RECAPTCHA = "recaptcha"
 
+PASSWORD_CHARS = "23456789abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ"
+
 
 class FixedLocationResponse(Response):
     autocorrect_location_header = False
@@ -76,6 +78,13 @@ e = document.getElementById("forotp");
 e.innerHTML="Scan this code in your Authy app:<br><img src='data:image/png;base64,{}'>";
 error("Verify Authy Code");
 """
+
+
+def genpassword():
+    ret = ""
+    for i in range(10):
+        ret += secrets.choice(PASSWORD_CHARS)
+    return ret
 
 
 @app.route("/", defaults={"path": ""}, methods=["GET"])
@@ -217,7 +226,10 @@ def manageusers():
         return "You must be admin to access this page."
     if request.method == "GET":
         return flask.render_template(
-            "users.html", activeuser=json.dumps(user.username), homepath=HOME_PATH
+            "users.html",
+            activeuser=json.dumps(user.username),
+            homepath=HOME_PATH,
+            recaptchasitekey=RECAPTCHA_SITE_KEY,
         )
     elif request.method == "POST":
         content = request.json
@@ -245,7 +257,7 @@ def manageusers():
                 ret["ok"] = True
 
             elif content.get("action") == "adduser":
-                password = secrets.token_urlsafe()[:8]
+                password = genpassword()
                 addlogin(
                     content["username"],
                     password,

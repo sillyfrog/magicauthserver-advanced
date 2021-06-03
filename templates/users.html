@@ -42,10 +42,12 @@
                     <option value="100">Admin</option>
                   </select>
                 </p>
+                {% if recaptchasitekey %}
                 <p>
                   <label for="recaptcha">Allow reCAPTCHA only login</label>
                   <input type="checkbox" id="allowrecaptcha">
                 </p>
+                {% endif %}
                 <p>
                   <button type="submit" class="btn btn-primary" id="adduser">Add User</button>
                 </p>
@@ -130,11 +132,16 @@
         return;
       }
       $('#adduser').text("Adding...");
+      {% if recaptchasitekey %}
+      var recap = allowrecaptcha.checked;
+      {% else %}
+      var recap = false;
+      {% endif %}
       var action = {
         "action": "adduser",
         "username": username,
         "level": parseInt($('#level').val()),
-        "allowrecaptcha": allowrecaptcha.checked
+        "allowrecaptcha": recap
       };
       sendAction(action, function (resp) {
         if (resp.ok) {
